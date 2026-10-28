@@ -13,6 +13,7 @@ from cloudops_agent.cloudtrail_analyzer import (
     analyze_cloudtrail_events,
 )
 from cloudops_agent.iam_analyzer import IAMPolicyValidationError, analyze_iam_policy
+from cloudops_agent.terraform_analyzer import TerraformValidationError, analyze_terraform
 from cloudops_agent.uploads import UploadValidationError, process_upload
 
 
@@ -23,7 +24,7 @@ st.caption("Prepare cloud investigation inputs in one place.")
 st.info(
     "IAM policies can be checked locally against a small set of deterministic rules. "
     "CloudTrail logs can be checked locally against a small set of deterministic rules. "
-    "Terraform files currently receive format summaries only. "
+    "Terraform files can be checked locally against a small set of deterministic rules. "
     "No AWS connection is made and uploaded content is never executed."
 )
 
@@ -35,6 +36,7 @@ uploaders = [
 ]
 
 active_cloudtrail_result_keys: set[str] = set()
+active_terraform_result_keys: set[str] = set()
 
 for column, input_type, label, extensions in uploaders:
     with column:
@@ -48,12 +50,17 @@ for column, input_type, label, extensions in uploaders:
         )
         if input_type == "AWS IAM policy" and not files:
             st.caption("Upload an IAM policy JSON file to enable analysis.")
+        if input_type == "Terraform configuration" and not files:
+            st.caption("Upload a Terraform .tf file to enable analysis.")
 
         for file_index, uploaded_file in enumerate(files):
             content = uploaded_file.getvalue()
             if input_type == "CloudTrail logs":
                 cloudtrail_result_key = analysis_result_key("cloudtrail", file_index, content)
                 active_cloudtrail_result_keys.add(cloudtrail_result_key)
+            elif input_type == "Terraform configuration":
+                terraform_result_key = analysis_result_key("terraform", file_index, content)
+                active_terraform_result_keys.add(terraform_result_key)
             try:
                 result = process_upload(uploaded_file.name, content, input_type)
             except UploadValidationError as error:
@@ -97,6 +104,50 @@ for column, input_type, label, extensions in uploaders:
                                         f"{event_evidence.get('eventSource', 'Unknown source')} · "
                                         f"{event_evidence.get('eventName', 'Unknown event')}"
                                     )
+                                st.markdown("**Description**")
+                                st.write(finding.description)
+                                st.markdown("**Evidence**")
+                                st.json(dict(finding.evidence))
+                                st.markdown("**Remediation**")
+                                st.write(finding.remediation)
+                continue
+
+            if input_type == "Terraform configuration":
+                result_key = terraform_result_key
+                button_key = result_key.replace("-result-", "-button-", 1)
+                if st.button("Analyze Terraform configuration", key=button_key):
+                    try:
+                        analysis = analyze_terraform(result.source_text, result.filename)
+                    except TerraformValidationError as error:
+                        st.session_state[result_key] = {"error": str(error)}
+                    else:
+                        st.session_state[result_key] = {
+                            "findings": analysis.findings,
+                            "limitations": analysis.limitations,
+                        }
+
+                analysis_result = st.session_state.get(result_key)
+                if analysis_result is not None:
+                    if "error" in analysis_result:
+                        st.error(f"Terraform configuration could not be analyzed: {analysis_result['error']}")
+                    else:
+                        findings = analysis_result["findings"]
+                        limitations = analysis_result["limitations"]
+                        if limitations:
+                            st.warning("Analysis limitations: " + " ".join(limitations))
+                        if not findings:
+                            st.info(
+                                "No configured Terraform analysis rules matched this file. "
+                                "Only implemented checks of supported literal values were run; "
+                                "dynamic values, provider defaults, modules, and deployed AWS state "
+                                "were not evaluated. This does not mean the configuration is safe."
+                            )
+                        for finding in findings:
+                            with st.expander(f"{finding.title} · {finding.severity.value}"):
+                                st.markdown(f"**Severity:** {finding.severity.value}")
+                                address = finding.evidence.get("resource_address")
+                                if address:
+                                    st.markdown(f"**Resource:** `{address}`")
                                 st.markdown("**Description**")
                                 st.write(finding.description)
                                 st.markdown("**Evidence**")
@@ -154,4 +205,9 @@ clear_inactive_analysis_results(
     st.session_state,
     "cloudtrail",
     active_cloudtrail_result_keys,
+)
+clear_inactive_analysis_results(
+    st.session_state,
+    "terraform",
+    active_terraform_result_keys,
 )

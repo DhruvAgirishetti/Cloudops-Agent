@@ -27,6 +27,7 @@ class UploadSummary:
     summary: str
     size_bytes: int
     parsed_document: dict[str, object] | None = None
+    source_text: str | None = None
 
 
 def process_upload(filename: str, content: bytes, input_type: InputType) -> UploadSummary:
@@ -41,13 +42,15 @@ def process_upload(filename: str, content: bytes, input_type: InputType) -> Uplo
         raise UploadValidationError("File exceeds the 5 MB upload limit.")
 
     parsed_document = None
+    source_text = None
     if input_type == "Terraform configuration":
-        summary = _summarize_terraform(content)
+        source_text = _decode_terraform(content)
+        summary = _summarize_terraform(source_text)
     else:
         summary, parsed_document = _summarize_json(content, input_type)
         if input_type not in ("AWS IAM policy", "CloudTrail logs"):
             parsed_document = None
-    return UploadSummary(safe_name, input_type, summary, len(content), parsed_document)
+    return UploadSummary(safe_name, input_type, summary, len(content), parsed_document, source_text)
 
 
 def _summarize_json(content: bytes, input_type: InputType) -> tuple[str, dict[str, object]]:
@@ -77,15 +80,18 @@ def _summarize_json(content: bytes, input_type: InputType) -> tuple[str, dict[st
     return summary, document
 
 
-def _summarize_terraform(content: bytes) -> str:
+def _decode_terraform(content: bytes) -> str:
     try:
-        text = content.decode("utf-8-sig")
+        return content.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise UploadValidationError("Terraform files must use UTF-8 text encoding.") from exc
+
+
+def _summarize_terraform(text: str) -> str:
     aws_providers = len(re.findall(r"\bprovider\s+\"aws\"\s*\{", text))
     resource_blocks = len(re.findall(r"\bresource\s+\"[^\"]+\"\s+\"[^\"]+\"\s*\{", text))
     return (
         f"Terraform text with {resource_blocks} resource block(s) and "
         f"{aws_providers} AWS provider block(s) by simple text count. "
-        "Configuration was not executed or security-checked."
+        "Configuration was not executed."
     )

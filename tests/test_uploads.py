@@ -28,6 +28,7 @@ class UploadTests(unittest.TestCase):
         self.assertIn("1 resource block(s)", result.summary)
         self.assertIn("1 AWS provider block(s)", result.summary)
         self.assertIn("not executed", result.summary)
+        self.assertEqual(result.source_text, content.decode())
 
     def test_invalid_uploads_are_rejected(self):
         invalid_uploads = [

@@ -1,0 +1,13 @@
+{
+  "eventVersion": "1.08",
+  "eventTime": "2026-10-28T14:30:00Z",
+  "eventSource": "ec2.amazonaws.com",
+  "eventName": "DescribeInstances",
+  "awsRegion": "us-east-1",
+  "sourceIPAddress": "203.0.113.25",
+  "userIdentity": {
+    "type": "IAMUser",
+    "userName": "test-user"
+  },
+  "responseElements": null
+}

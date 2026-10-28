@@ -26,6 +26,7 @@ class UploadSummary:
     input_type: InputType
     summary: str
     size_bytes: int
+    parsed_document: dict[str, object] | None = None
 
 
 def process_upload(filename: str, content: bytes, input_type: InputType) -> UploadSummary:
@@ -39,14 +40,17 @@ def process_upload(filename: str, content: bytes, input_type: InputType) -> Uplo
     if len(content) > MAX_UPLOAD_BYTES:
         raise UploadValidationError("File exceeds the 5 MB upload limit.")
 
+    parsed_document = None
     if input_type == "Terraform configuration":
         summary = _summarize_terraform(content)
     else:
-        summary = _summarize_json(content, input_type)
-    return UploadSummary(safe_name, input_type, summary, len(content))
+        summary, parsed_document = _summarize_json(content, input_type)
+        if input_type not in ("AWS IAM policy", "CloudTrail logs"):
+            parsed_document = None
+    return UploadSummary(safe_name, input_type, summary, len(content), parsed_document)
 
 
-def _summarize_json(content: bytes, input_type: InputType) -> str:
+def _summarize_json(content: bytes, input_type: InputType) -> tuple[str, dict[str, object]]:
     try:
         document = json.loads(content.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -59,14 +63,18 @@ def _summarize_json(content: bytes, input_type: InputType) -> str:
         if not isinstance(statements, (list, dict)):
             raise UploadValidationError("This does not look like an IAM policy: expected a Statement field.")
         count = len(statements) if isinstance(statements, list) else 1
-        return f"JSON policy document with {count} statement(s). No security checks have been run."
+        summary = f"JSON policy document with {count} statement(s). No security checks have been run."
+        return summary, document
 
     records = document.get("Records")
     if isinstance(records, list):
-        return f"CloudTrail-style JSON with {len(records)} record(s). No security checks have been run."
+        summary = f"CloudTrail-style JSON with {len(records)} record(s)."
+        return summary, document
     if "eventName" in document:
-        return "Single CloudTrail-style event record. No security checks have been run."
-    return "Valid JSON object; CloudTrail record structure was not identified. No security checks have been run."
+        summary = "Single CloudTrail-style event record."
+        return summary, document
+    summary = "Valid JSON object; CloudTrail record structure was not identified. No security checks have been run."
+    return summary, document
 
 
 def _summarize_terraform(content: bytes) -> str:

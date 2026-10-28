@@ -14,7 +14,8 @@ class UploadTests(unittest.TestCase):
         result = process_upload("events.JSON", content, "CloudTrail logs")
         self.assertEqual(result.filename, "events.JSON")
         self.assertIn("1 record(s)", result.summary)
-        self.assertIn("No security checks", result.summary)
+        self.assertIsInstance(result.parsed_document, dict)
+        self.assertEqual(result.parsed_document["Records"][0]["eventName"], "ConsoleLogin")
 
     def test_iam_policy_accepts_single_statement_object(self):
         content = json.dumps({"Statement": {"Effect": "Allow"}}).encode()

@@ -1,17 +1,17 @@
 """Streamlit upload interface for CloudOps Agent."""
 
-import hashlib
-
 import streamlit as st
 
 from cloudops_agent.analysis_state import (
     analysis_result_key,
     clear_inactive_analysis_results,
+    current_finding_artifacts,
 )
 from cloudops_agent.cloudtrail_analyzer import (
     CloudTrailValidationError,
     analyze_cloudtrail_events,
 )
+from cloudops_agent.correlation import correlate_findings
 from cloudops_agent.iam_analyzer import IAMPolicyValidationError, analyze_iam_policy
 from cloudops_agent.terraform_analyzer import TerraformValidationError, analyze_terraform
 from cloudops_agent.uploads import UploadValidationError, process_upload
@@ -36,6 +36,7 @@ uploaders = [
 ]
 
 active_cloudtrail_result_keys: set[str] = set()
+active_iam_result_keys: set[str] = set()
 active_terraform_result_keys: set[str] = set()
 
 for column, input_type, label, extensions in uploaders:
@@ -58,6 +59,9 @@ for column, input_type, label, extensions in uploaders:
             if input_type == "CloudTrail logs":
                 cloudtrail_result_key = analysis_result_key("cloudtrail", file_index, content)
                 active_cloudtrail_result_keys.add(cloudtrail_result_key)
+            elif input_type == "AWS IAM policy":
+                iam_result_key = analysis_result_key("iam", file_index, content)
+                active_iam_result_keys.add(iam_result_key)
             elif input_type == "Terraform configuration":
                 terraform_result_key = analysis_result_key("terraform", file_index, content)
                 active_terraform_result_keys.add(terraform_result_key)
@@ -159,9 +163,8 @@ for column, input_type, label, extensions in uploaders:
             if input_type != "AWS IAM policy":
                 continue
 
-            content_hash = hashlib.sha256(content).hexdigest()
-            result_key = f"iam-analysis-result-{file_index}-{content_hash}"
-            button_key = f"iam-analysis-button-{file_index}-{content_hash}"
+            result_key = iam_result_key
+            button_key = result_key.replace("-result-", "-button-", 1)
             if st.button("Analyze IAM policy", key=button_key):
                 try:
                     findings = analyze_iam_policy(result.parsed_document)
@@ -203,6 +206,11 @@ for column, input_type, label, extensions in uploaders:
 
 clear_inactive_analysis_results(
     st.session_state,
+    "iam",
+    active_iam_result_keys,
+)
+clear_inactive_analysis_results(
+    st.session_state,
     "cloudtrail",
     active_cloudtrail_result_keys,
 )
@@ -211,3 +219,25 @@ clear_inactive_analysis_results(
     "terraform",
     active_terraform_result_keys,
 )
+
+correlation_artifacts = current_finding_artifacts(
+    st.session_state,
+    {
+        "iam": active_iam_result_keys,
+        "cloudtrail": active_cloudtrail_result_keys,
+    },
+)
+correlations = correlate_findings(correlation_artifacts)
+if correlations:
+    st.subheader("Cross-source correlations")
+    for correlation in correlations:
+        with st.expander(f"{correlation.relationship_type} · {correlation.correlation_id}"):
+            st.write(correlation.explanation)
+            st.markdown("**Supporting evidence**")
+            st.json([
+                {"path": item.path, "value": item.value}
+                for item in correlation.supporting_evidence
+            ])
+            st.markdown("**Limitations**")
+            for limitation in correlation.limitations:
+                st.write(limitation)

@@ -7,7 +7,7 @@ name = "cloudops-agent"
 version = "0.1.0"
 description = "A local interface for preparing cloud security investigation inputs."
 requires-python = ">=3.10"
-dependencies = ["streamlit>=1.40,<2", "python-hcl2>=8.1.4,<9"]
+dependencies = ["streamlit>=1.40,<2", "python-hcl2>=8.1.4,<9", "openai>=1.0,<3"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

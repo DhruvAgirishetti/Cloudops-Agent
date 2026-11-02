@@ -11,7 +11,21 @@ from cloudops_agent.cloudtrail_analyzer import (
     CloudTrailValidationError,
     analyze_cloudtrail_events,
 )
-from cloudops_agent.correlation import correlate_findings
+from cloudops_agent.correlation import Correlation, FindingRef, correlate_findings
+from cloudops_agent.investigation_display import (
+    VALIDATION_DISCLAIMER,
+    render_investigation_output,
+)
+from cloudops_agent.investigation_output import InvestigationOutput
+from cloudops_agent.investigation_workflow import (
+    active_investigation_result_keys,
+    build_correlation_investigation,
+    build_finding_investigation,
+    clear_inactive_investigation_results,
+    correlation_investigation_key,
+    execute_investigation_action,
+    finding_investigation_key,
+)
 from cloudops_agent.iam_analyzer import IAMPolicyValidationError, analyze_iam_policy
 from cloudops_agent.terraform_analyzer import TerraformValidationError, analyze_terraform
 from cloudops_agent.uploads import UploadValidationError, process_upload
@@ -38,6 +52,7 @@ uploaders = [
 active_cloudtrail_result_keys: set[str] = set()
 active_iam_result_keys: set[str] = set()
 active_terraform_result_keys: set[str] = set()
+pending_investigation: tuple[str, object, str] | None = None
 
 for column, input_type, label, extensions in uploaders:
     with column:
@@ -97,6 +112,16 @@ for column, input_type, label, extensions in uploaders:
                             )
                         for finding in findings:
                             with st.expander(f"{finding.title} · {finding.severity.value}"):
+                                finding_ref = FindingRef(result_key, finding.finding_id)
+                                if st.button(
+                                    "Investigate with AI",
+                                    key=f"{finding_investigation_key(finding_ref)}-button",
+                                ):
+                                    pending_investigation = (
+                                        "finding",
+                                        finding_ref,
+                                        f"{finding.source_type.value}: {finding.title}",
+                                    )
                                 st.markdown(f"**Severity:** {finding.severity.value}")
                                 event_evidence = finding.evidence.get("event", {})
                                 event_id = finding.evidence.get("eventID")
@@ -148,6 +173,16 @@ for column, input_type, label, extensions in uploaders:
                             )
                         for finding in findings:
                             with st.expander(f"{finding.title} · {finding.severity.value}"):
+                                finding_ref = FindingRef(result_key, finding.finding_id)
+                                if st.button(
+                                    "Investigate with AI",
+                                    key=f"{finding_investigation_key(finding_ref)}-button",
+                                ):
+                                    pending_investigation = (
+                                        "finding",
+                                        finding_ref,
+                                        f"{finding.source_type.value}: {finding.title}",
+                                    )
                                 st.markdown(f"**Severity:** {finding.severity.value}")
                                 address = finding.evidence.get("resource_address")
                                 if address:
@@ -190,6 +225,16 @@ for column, input_type, label, extensions in uploaders:
 
             for finding in findings:
                 with st.expander(f"{finding.title} · {finding.severity.value}"):
+                    finding_ref = FindingRef(result_key, finding.finding_id)
+                    if st.button(
+                        "Investigate with AI",
+                        key=f"{finding_investigation_key(finding_ref)}-button",
+                    ):
+                        pending_investigation = (
+                            "finding",
+                            finding_ref,
+                            f"{finding.source_type.value}: {finding.title}",
+                        )
                     st.markdown(f"**Severity:** {finding.severity.value}")
                     statement_index = finding.evidence.get("statement_index")
                     if statement_index is not None:
@@ -241,3 +286,104 @@ if correlations:
             st.markdown("**Limitations**")
             for limitation in correlation.limitations:
                 st.write(limitation)
+            if st.button(
+                "Investigate correlation with AI",
+                key=f"{correlation_investigation_key(correlation)}-button",
+            ):
+                pending_investigation = (
+                    "correlation",
+                    correlation,
+                    f"Correlation: {correlation.relationship_type}",
+                )
+
+ai_artifacts = current_finding_artifacts(
+    st.session_state,
+    {
+        "iam": active_iam_result_keys,
+        "cloudtrail": active_cloudtrail_result_keys,
+        "terraform": active_terraform_result_keys,
+    },
+)
+active_ai_result_keys = active_investigation_result_keys(ai_artifacts, correlations)
+clear_inactive_investigation_results(st.session_state, active_ai_result_keys)
+
+if pending_investigation is not None:
+    action_kind, selected_scope, scope_label = pending_investigation
+    if action_kind == "finding":
+        assert isinstance(selected_scope, FindingRef)
+        ai_result_key = finding_investigation_key(selected_scope)
+        limitations_by_artifact = {}
+        for artifact_id, _findings in ai_artifacts:
+            if not artifact_id.startswith("terraform-analysis-result-"):
+                continue
+            analysis_result = st.session_state.get(artifact_id)
+            limitations = analysis_result.get("limitations") if isinstance(analysis_result, dict) else None
+            if isinstance(limitations, (list, tuple)) and all(isinstance(item, str) for item in limitations):
+                limitations_by_artifact[artifact_id] = tuple(limitations)
+        try:
+            built_input = build_finding_investigation(
+                selected_scope,
+                artifacts=ai_artifacts,
+                correlations=correlations,
+                artifact_limitations=limitations_by_artifact,
+            )
+        except (TypeError, ValueError):
+            st.session_state[ai_result_key] = {
+                "status": "error",
+                "label": scope_label,
+                "message": "The selected finding is no longer current. Run deterministic analysis again.",
+            }
+        else:
+            with st.spinner("Investigating selected evidence…"):
+                execute_investigation_action(
+                    st.session_state,
+                    ai_result_key,
+                    built_input,
+                    requested=True,
+                    label=scope_label,
+                )
+    else:
+        assert isinstance(selected_scope, Correlation)
+        ai_result_key = correlation_investigation_key(selected_scope)
+        try:
+            built_input = build_correlation_investigation(
+                selected_scope,
+                artifacts=ai_artifacts,
+                correlations=correlations,
+            )
+        except (TypeError, ValueError):
+            st.session_state[ai_result_key] = {
+                "status": "error",
+                "label": scope_label,
+                "message": "The selected correlation is no longer current. Refresh the analysis and try again.",
+            }
+        else:
+            with st.spinner("Investigating correlated evidence…"):
+                execute_investigation_action(
+                    st.session_state,
+                    ai_result_key,
+                    built_input,
+                    requested=True,
+                    label=scope_label,
+                )
+
+visible_ai_results = [
+    (key, st.session_state.get(key))
+    for key in sorted(active_ai_result_keys)
+    if st.session_state.get(key) is not None
+]
+if visible_ai_results:
+    st.subheader("AI-generated investigation output")
+    st.caption(VALIDATION_DISCLAIMER)
+    for result_key, record in visible_ai_results:
+        if not isinstance(record, dict):
+            continue
+        label = record.get("label")
+        if not isinstance(label, str):
+            label = "Investigation"
+        with st.expander(label):
+            if record.get("status") == "error":
+                message = record.get("message")
+                st.error(message if isinstance(message, str) else "AI investigation could not be completed.")
+            elif record.get("status") == "success" and isinstance(record.get("output"), InvestigationOutput):
+                render_investigation_output(st, record["output"])

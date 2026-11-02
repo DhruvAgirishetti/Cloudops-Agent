@@ -26,8 +26,18 @@ finding. A correlation does not establish shared identity, authorization, or cau
   supported literal Terraform patterns; Terraform is never executed.
 - `src/cloudops_agent/correlation.py` — deterministic, conservative relationships
   between artifact-scoped findings.
+- `src/cloudops_agent/investigation_input.py` — provider-independent construction
+  of a scoped, allowlisted InvestigationInput and request-local reference maps.
+- `src/cloudops_agent/investigation_output.py` — strict provider-independent output
+  parsing, structural validation, and request-scoped citation checks.
+- `src/cloudops_agent/meta_provider.py` — injected-client Meta Model API
+  coordination, constrained response format, safe errors, and an offline fake.
+- `src/cloudops_agent/investigation_workflow.py` and
+  `src/cloudops_agent/investigation_display.py` — request-scoped Streamlit
+  investigation state helpers and rendering of validated output.
 - `src/cloudops_agent/analysis_state.py` — content-based result keys, stale-result
   cleanup, and collection of current findings for correlation.
+- `docs/` — architecture and data-contract design notes.
 - `tests/` — standard-library `unittest` tests.
 - `test_samples/` — synthetic input examples.
 
@@ -68,8 +78,10 @@ Use Python 3.10 or newer. Install the project and its declared dependencies in
 
 ## AI Investigation Direction
 
-No AI provider, model, API, or integration has been selected. Do not add one until
-the architecture and data contract have been designed and approved.
+The selected provider is Meta Model API with Muse Spark 1.3 (`muse-spark-1.3`)
+Standard mode. Its provider module is isolated from the dashboard. The live API
+path has not been verified with a real request; local tests must use the offline
+fake and must never consume API credits.
 
 When AI investigation work is approved:
 
@@ -91,6 +103,9 @@ When AI investigation work is approved:
    application/session data. Do not enrich investigation context with external
    information unless explicitly approved.
 7. Do not add AWS integration, credentials, or infrastructure deployment.
+8. Validate future model output structurally and against only the exact request's
+   opaque-reference maps before display. Structural validation does not prove that
+   claims are supported by cited evidence.
 
 ## Security and Scope
 

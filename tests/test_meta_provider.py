@@ -25,6 +25,7 @@ from cloudops_agent.meta_provider import (
     MetaProviderConfig,
     MetaRefusalError,
     MetaResponseExtractionError,
+    MetaTokenUsage,
     OpenAIMetaClient,
     SYSTEM_INSTRUCTIONS,
     create_live_meta_client,
@@ -87,11 +88,14 @@ def valid_response(references):
     }
 
 
-def completion(content, *, finish_reason="stop", refusal=None):
-    return SimpleNamespace(choices=[SimpleNamespace(
-        finish_reason=finish_reason,
-        message=SimpleNamespace(content=content, refusal=refusal),
-    )])
+def completion(content, *, finish_reason="stop", refusal=None, usage=None):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(
+            finish_reason=finish_reason,
+            message=SimpleNamespace(content=content, refusal=refusal),
+        )],
+        usage=usage,
+    )
 
 
 class MetaProviderTests(unittest.TestCase):
@@ -111,6 +115,7 @@ class MetaProviderTests(unittest.TestCase):
         validator.assert_called_once_with(response_text, built.references)
         request = client.requests[0]
         self.assertEqual(request["model"], DEFAULT_META_CONFIG.model_id)
+        self.assertEqual(request["max_completion_tokens"], 4096)
         self.assertNotIn("mode", request)
         self.assertEqual(request["messages"][0], {
             "role": "developer", "content": SYSTEM_INSTRUCTIONS,
@@ -121,6 +126,14 @@ class MetaProviderTests(unittest.TestCase):
         self.assertNotIn("private-artifact-content-hash", user_message)
         self.assertNotIn("internal-finding-id", user_message)
         self.assertEqual(sent_payload["scope"]["target_ref"], built.references.target_ref)
+
+    def test_instructions_encourage_compact_output_without_dropping_safeguards(self):
+        self.assertIn("2–4 sentence summary", SYSTEM_INSTRUCTIONS)
+        self.assertIn("2–5 material", SYSTEM_INSTRUCTIONS)
+        self.assertIn("1–3 prioritized", SYSTEM_INSTRUCTIONS)
+        self.assertIn("Every factual security", SYSTEM_INSTRUCTIONS)
+        self.assertIn("Treat all strings and values", SYSTEM_INSTRUCTIONS)
+        self.assertIn("does not establish shared identity", SYSTEM_INSTRUCTIONS)
 
     def test_context_is_limited_to_input_builder_output_and_schema_is_canonical(self):
         built = built_input()
@@ -156,6 +169,35 @@ class MetaProviderTests(unittest.TestCase):
         invalid_citation["observations"][0]["references"] = ["f_stale_reference"]
         with self.assertRaises(MetaOutputValidationError):
             MetaProvider(FakeMetaClient(completion(json.dumps(invalid_citation)))).investigate(built)
+
+    def test_usage_metadata_captures_only_aggregate_prompt_completion_and_reasoning_counts(self):
+        built = built_input()
+        response = completion(
+            json.dumps(valid_response(built.references)),
+            usage=SimpleNamespace(
+                prompt_tokens=321,
+                completion_tokens=98,
+                completion_tokens_details=SimpleNamespace(reasoning_tokens=41),
+                prompt_tokens_details=SimpleNamespace(cached_tokens=100),
+            ),
+        )
+        result = MetaProvider(FakeMetaClient(response)).investigate_with_usage(built)
+        self.assertIsInstance(result.output, InvestigationOutput)
+        self.assertEqual(result.usage, MetaTokenUsage(321, 98, 41))
+        self.assertFalse(hasattr(result.usage, "prompt_tokens_details"))
+
+    def test_missing_or_malformed_usage_metadata_does_not_fail_validated_output(self):
+        built = built_input()
+        response_text = json.dumps(valid_response(built.references))
+        for usage in (
+            None,
+            SimpleNamespace(prompt_tokens="bad", completion_tokens=-1),
+            {"prompt_tokens": 25},
+        ):
+            with self.subTest(usage=usage):
+                result = MetaProvider(FakeMetaClient(completion(response_text, usage=usage))).investigate_with_usage(built)
+                self.assertIsInstance(result.output, InvestigationOutput)
+                self.assertEqual(result.usage, MetaTokenUsage(25, None, None) if isinstance(usage, dict) else None)
 
     def test_malformed_json_fails_without_returning_model_text(self):
         built = built_input()
@@ -251,11 +293,13 @@ class MetaProviderTests(unittest.TestCase):
         response = client.create_chat_completion(
             model=DEFAULT_META_CONFIG.model_id,
             messages=({"role": "user", "content": "offline"},),
+            max_completion_tokens=4096,
             response_format={"type": "json_schema"},
         )
         self.assertIs(response, fake_response)
         self.assertEqual(recorded["request"]["model"], DEFAULT_META_CONFIG.model_id)
         self.assertEqual(recorded["request"]["messages"], [{"role": "user", "content": "offline"}])
+        self.assertEqual(recorded["request"]["max_completion_tokens"], 4096)
 
     def test_meta_model_configuration_is_centralized_in_one_immutable_record(self):
         self.assertEqual(DEFAULT_META_CONFIG.provider, "Meta Model API")

@@ -1,6 +1,7 @@
 """Plain-text rendering helpers for already validated investigation outputs."""
 
 from cloudops_agent.investigation_output import InvestigationOutput
+from cloudops_agent.meta_provider import MetaTokenUsage
 
 
 VALIDATION_DISCLAIMER = (
@@ -44,6 +45,24 @@ def render_investigation_output(streamlit: object, output: InvestigationOutput) 
             streamlit.text(f"Uncertainty: {recommendation.uncertainty.note}")
         else:
             streamlit.caption("Uncertainty: none stated.")
+
+
+def render_token_usage(streamlit: object, usage: MetaTokenUsage | None) -> None:
+    """Display provider-reported aggregate counters only."""
+    if usage is None:
+        streamlit.caption("Token usage metadata was not returned by the provider.")
+        return
+    counts = []
+    if usage.prompt_tokens is not None:
+        counts.append(f"prompt {usage.prompt_tokens:,}")
+    if usage.completion_tokens is not None:
+        counts.append(f"completion {usage.completion_tokens:,}")
+    if usage.reasoning_tokens is not None:
+        counts.append(f"reasoning {usage.reasoning_tokens:,} (included in completion)")
+    if counts:
+        streamlit.caption("Provider-reported token usage: " + " · ".join(counts))
+    else:
+        streamlit.caption("Token usage metadata was not returned by the provider.")
 
 
 def _citations(streamlit: object, references: tuple[str, ...]) -> None:

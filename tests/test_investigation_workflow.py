@@ -2,10 +2,11 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from cloudops_agent.correlation import Correlation, EvidenceValue, FindingRef
-from cloudops_agent.investigation_display import render_investigation_output
+from cloudops_agent.investigation_display import render_investigation_output, render_token_usage
 from cloudops_agent.investigation_output import InvestigationOutput
 from cloudops_agent.investigation_workflow import (
     active_investigation_result_keys,
@@ -15,10 +16,12 @@ from cloudops_agent.investigation_workflow import (
     correlation_investigation_key,
     execute_investigation_action,
     finding_investigation_key,
+    has_successful_investigation_result,
 )
 from cloudops_agent.meta_provider import (
     FakeMetaClient,
     MetaConfigurationError,
+    MetaTokenUsage,
 )
 from cloudops_agent.models import Finding, Severity, SourceType
 
@@ -205,7 +208,13 @@ class InvestigationWorkflowTests(unittest.TestCase):
     def test_successful_validated_output_is_stored_and_displayed(self):
         reference = FindingRef("iam-upload", "same-finding-id")
         built = build_finding_investigation(reference, artifacts=[("iam-upload", [iam_finding()])], correlations=[])
-        client = FakeMetaClient(SimpleCompletion(json.dumps(valid_response(built.references))))
+        usage = MetaTokenUsage(250, 70, 22)
+        sdk_usage = SimpleNamespace(
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=usage.reasoning_tokens),
+        )
+        client = FakeMetaClient(SimpleCompletion(json.dumps(valid_response(built.references)), usage=sdk_usage))
         state = {"iam-analysis-result-current": {"findings": [iam_finding()]}}
         result_key = finding_investigation_key(reference)
         execute_investigation_action(
@@ -217,9 +226,11 @@ class InvestigationWorkflowTests(unittest.TestCase):
         record = state[result_key]
         self.assertEqual(record["status"], "success")
         self.assertIsInstance(record["output"], InvestigationOutput)
+        self.assertEqual(record["usage"], usage)
         self.assertEqual(len(client.requests), 1)
 
         view = DisplayRecorder()
+        render_token_usage(view, record["usage"])
         render_investigation_output(view, record["output"])
         self.assertIn("The analyzer evidence is summarized.", view.text_values)
         self.assertTrue(any("Citations:" in label for label in view.labels))
@@ -228,6 +239,7 @@ class InvestigationWorkflowTests(unittest.TestCase):
         self.assertIn("**Recommendations**", view.labels)
         self.assertTrue(any("Investigation · Low priority" in label for label in view.labels))
         self.assertTrue(any("Uncertainty: Deployed state was not evaluated." in value for value in view.text_values))
+        self.assertTrue(any("prompt 250" in label and "completion 70" in label and "reasoning 22" in label for label in view.labels))
 
     def test_provider_and_validation_failures_are_safe_and_keep_deterministic_results(self):
         reference = FindingRef("iam-upload", "same-finding-id")
@@ -309,6 +321,74 @@ class InvestigationWorkflowTests(unittest.TestCase):
         self.assertEqual(len(client.requests), 1)
         self.assertIs(state[key], previous)
 
+    def test_same_scope_reuses_success_until_explicit_reinvestigation(self):
+        reference = FindingRef("iam-upload", "same-finding-id")
+        built = build_finding_investigation(reference, artifacts=[("iam-upload", [iam_finding()])], correlations=[])
+        client = FakeMetaClient(SimpleCompletion(json.dumps(valid_response(built.references))))
+        state = {}
+        key = finding_investigation_key(reference)
+        execute_investigation_action(
+            state, key, built, requested=True, label="finding", client_factory=lambda: client,
+        )
+        first_output = state[key]["output"]
+        self.assertTrue(has_successful_investigation_result(state, key))
+
+        factory_calls = []
+        execute_investigation_action(
+            state, key, built, requested=True, label="finding",
+            client_factory=lambda: factory_calls.append(True) or client,
+        )
+        self.assertEqual(factory_calls, [])
+        self.assertEqual(len(client.requests), 1)
+        self.assertIs(state[key]["output"], first_output)
+
+        execute_investigation_action(
+            state, key, built, requested=True, label="finding", force=True,
+            client_factory=lambda: client,
+        )
+        self.assertEqual(len(client.requests), 2)
+        self.assertIsNot(state[key]["output"], first_output)
+
+    def test_failed_reinvestigation_keeps_only_the_previous_validated_result(self):
+        reference = FindingRef("iam-upload", "same-finding-id")
+        built = build_finding_investigation(reference, artifacts=[("iam-upload", [iam_finding()])], correlations=[])
+        key = finding_investigation_key(reference)
+        state = {}
+        good_client = FakeMetaClient(SimpleCompletion(json.dumps(valid_response(built.references))))
+        execute_investigation_action(
+            state, key, built, requested=True, label="finding", client_factory=lambda: good_client,
+        )
+        previous_output = state[key]["output"]
+
+        execute_investigation_action(
+            state, key, built, requested=True, label="finding", force=True,
+            client_factory=lambda: FakeMetaClient(exception=RuntimeError("private failure details")),
+        )
+        self.assertEqual(state[key]["status"], "success")
+        self.assertIs(state[key]["output"], previous_output)
+        self.assertIn("failed", state[key]["last_reinvestigation_error"])
+        self.assertNotIn("private failure details", repr(state[key]))
+
+    def test_failed_or_invalid_attempt_is_not_cached_as_a_success(self):
+        reference = FindingRef("iam-upload", "same-finding-id")
+        built = build_finding_investigation(reference, artifacts=[("iam-upload", [iam_finding()])], correlations=[])
+        key = finding_investigation_key(reference)
+        state = {}
+        invalid = valid_response(built.references)
+        invalid["summary"]["references"] = ["f_unknown"]
+        execute_investigation_action(
+            state, key, built, requested=True, label="finding",
+            client_factory=lambda: FakeMetaClient(SimpleCompletion(json.dumps(invalid))),
+        )
+        self.assertFalse(has_successful_investigation_result(state, key))
+
+        good_client = FakeMetaClient(SimpleCompletion(json.dumps(valid_response(built.references))))
+        execute_investigation_action(
+            state, key, built, requested=True, label="finding", client_factory=lambda: good_client,
+        )
+        self.assertTrue(has_successful_investigation_result(state, key))
+        self.assertEqual(len(good_client.requests), 1)
+
     def test_api_key_like_provider_error_is_not_stored_or_logged(self):
         reference = FindingRef("iam-upload", "same-finding-id")
         built = build_finding_investigation(reference, artifacts=[("iam-upload", [iam_finding()])], correlations=[])
@@ -323,12 +403,13 @@ class InvestigationWorkflowTests(unittest.TestCase):
 
 
 class SimpleCompletion:
-    def __init__(self, content):
+    def __init__(self, content, usage=None):
         from types import SimpleNamespace
         self.choices = [SimpleNamespace(
             finish_reason="stop",
             message=SimpleNamespace(content=content, refusal=None),
         )]
+        self.usage = usage
 
 
 if __name__ == "__main__":

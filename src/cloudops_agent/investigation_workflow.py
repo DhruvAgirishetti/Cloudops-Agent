@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequenc
 
 from cloudops_agent.correlation import Correlation, FindingRef
 from cloudops_agent.investigation_input import BuiltInvestigationInput, build_investigation_input
+from cloudops_agent.investigation_output import InvestigationOutput
 from cloudops_agent.meta_provider import (
     MetaClient,
     MetaClientError,
@@ -77,6 +78,19 @@ def clear_inactive_investigation_results(
             del session_state[key]
 
 
+def has_successful_investigation_result(
+    session_state: Mapping[str, object],
+    result_key: str,
+) -> bool:
+    """Return whether this exact scope has a cached validator-approved result."""
+    record = session_state.get(result_key)
+    return (
+        isinstance(record, dict)
+        and record.get("status") == "success"
+        and isinstance(record.get("output"), InvestigationOutput)
+    )
+
+
 def build_finding_investigation(
     reference: FindingRef,
     *,
@@ -116,31 +130,55 @@ def execute_investigation_action(
     *,
     requested: bool,
     label: str,
+    force: bool = False,
     client_factory: Callable[[], MetaClient] = create_live_meta_client,
 ) -> None:
-    """Run once only when explicitly requested and store only safe result records."""
+    """Run on an explicit action, reusing a validated result unless forced."""
     if not requested:
+        return
+    cached_result = session_state.get(result_key)
+    has_cached_result = has_successful_investigation_result(session_state, result_key)
+    if has_cached_result and not force:
         return
     try:
         provider = MetaProvider(client_factory())
-        output = provider.investigate(built_input)
+        result = provider.investigate_with_usage(built_input)
     except MetaProviderError as error:
-        session_state[result_key] = {
-            "status": "error",
-            "label": label,
-            "message": _safe_error_message(error),
-        }
+        _store_safe_failure(
+            session_state, result_key, label, _safe_error_message(error),
+            cached_result if has_cached_result else None,
+        )
     except Exception:
-        session_state[result_key] = {
-            "status": "error",
-            "label": label,
-            "message": "AI investigation could not be completed.",
-        }
+        _store_safe_failure(
+            session_state, result_key, label,
+            "AI investigation could not be completed.",
+            cached_result if has_cached_result else None,
+        )
     else:
         session_state[result_key] = {
             "status": "success",
             "label": label,
-            "output": output,
+            "output": result.output,
+            "usage": result.usage,
+        }
+
+
+def _store_safe_failure(
+    session_state: MutableMapping[str, object],
+    result_key: str,
+    label: str,
+    message: str,
+    cached_result: object,
+) -> None:
+    if isinstance(cached_result, dict):
+        preserved = dict(cached_result)
+        preserved["last_reinvestigation_error"] = message
+        session_state[result_key] = preserved
+    else:
+        session_state[result_key] = {
+            "status": "error",
+            "label": label,
+            "message": message,
         }
 
 

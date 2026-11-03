@@ -27,6 +27,7 @@ class MetaProviderConfig:
 
 
 DEFAULT_META_CONFIG = MetaProviderConfig()
+MAX_COMPLETION_TOKENS = 4096
 
 
 SYSTEM_INSTRUCTIONS = """You are the CloudOps Agent cloud security investigation assistant.
@@ -40,6 +41,11 @@ explain applicable analyzer and correlation limitations. Every factual security
 claim must cite one or more supplied opaque finding or correlation references.
 Do not present general security knowledge, assumptions, or inferred context as
 facts about the uploaded environment.
+
+Keep the response concise: write a 2–4 sentence summary; give 2–5 material
+observations when supported by the evidence (fewer if fewer are supported); state
+limitations concisely, relevantly, and without repetition; and give 1–3 prioritized
+recommendations. Do not add filler to reach these targets.
 
 Do not invent findings, relationships, AWS resources, identities, accounts, or
 events. A severity is not proof of real-world impact. A Terraform finding does not
@@ -85,6 +91,23 @@ class MetaOutputValidationError(MetaProviderError):
     """Raised when response text fails the existing output validator."""
 
 
+@dataclass(frozen=True)
+class MetaTokenUsage:
+    """Aggregate token counters returned by the provider, when available."""
+
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    reasoning_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class MetaInvestigationResult:
+    """Validated result plus aggregate provider token counters."""
+
+    output: InvestigationOutput
+    usage: MetaTokenUsage | None
+
+
 def _validate_config(config: MetaProviderConfig) -> None:
     if not isinstance(config, MetaProviderConfig):
         raise MetaConfigurationError("A valid Meta provider configuration is required.")
@@ -107,6 +130,7 @@ class MetaClient(Protocol):
         *,
         model: str,
         messages: Sequence[Mapping[str, str]],
+        max_completion_tokens: int,
         response_format: Mapping[str, object],
     ) -> object:
         """Return an SDK-shaped completion without prescribing its implementation."""
@@ -123,12 +147,18 @@ class OpenAIMetaClient:
         *,
         model: str,
         messages: Sequence[Mapping[str, str]],
+        max_completion_tokens: int,
         response_format: Mapping[str, object],
     ) -> object:
         chat = getattr(self._sdk_client, "chat")
         completions = getattr(chat, "completions")
         create = getattr(completions, "create")
-        return create(model=model, messages=list(messages), response_format=dict(response_format))
+        return create(
+            model=model,
+            messages=list(messages),
+            max_completion_tokens=max_completion_tokens,
+            response_format=dict(response_format),
+        )
 
 
 def create_live_meta_client(
@@ -180,6 +210,14 @@ class MetaProvider:
         self._config = config
 
     def investigate(self, built_input: BuiltInvestigationInput) -> InvestigationOutput:
+        """Return only the validator-approved investigation output."""
+        return self.investigate_with_usage(built_input).output
+
+    def investigate_with_usage(
+        self,
+        built_input: BuiltInvestigationInput,
+    ) -> MetaInvestigationResult:
+        """Return validated output and aggregate usage without retaining raw response data."""
         payload_text = _serialize_built_input(built_input)
         messages = (
             {"role": "developer", "content": SYSTEM_INSTRUCTIONS},
@@ -194,6 +232,7 @@ class MetaProvider:
         request = {
             "model": self._config.model_id,
             "messages": messages,
+            "max_completion_tokens": MAX_COMPLETION_TOKENS,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -210,11 +249,12 @@ class MetaProvider:
 
         raw_output = _extract_response_text(response)
         try:
-            return validate_investigation_output(raw_output, built_input.references)
+            output = validate_investigation_output(raw_output, built_input.references)
         except InvestigationOutputValidationError:
             raise MetaOutputValidationError(
                 "The Meta response did not pass investigation output validation."
             ) from None
+        return MetaInvestigationResult(output, _extract_token_usage(response))
 
 
 class FakeMetaClient:
@@ -230,11 +270,13 @@ class FakeMetaClient:
         *,
         model: str,
         messages: Sequence[Mapping[str, str]],
+        max_completion_tokens: int,
         response_format: Mapping[str, object],
     ) -> object:
         self.requests.append({
             "model": model,
             "messages": [dict(message) for message in messages],
+            "max_completion_tokens": max_completion_tokens,
             "response_format": dict(response_format),
         })
         if self.exception is not None:
@@ -299,3 +341,34 @@ def _extract_response_text(response: object) -> str:
     if not isinstance(content, str):
         raise MetaResponseExtractionError("The Meta response content was not text.")
     return content
+
+
+def _extract_token_usage(response: object) -> MetaTokenUsage | None:
+    """Read aggregate counters only; absent or malformed metadata is ignored."""
+    usage = _read_field(response, "usage")
+    if usage is None:
+        return None
+    prompt_tokens = _nonnegative_int(_read_field(usage, "prompt_tokens"))
+    completion_tokens = _nonnegative_int(_read_field(usage, "completion_tokens"))
+    details = _read_field(usage, "completion_tokens_details")
+    reasoning_tokens = _nonnegative_int(_read_field(details, "reasoning_tokens"))
+    if prompt_tokens is None and completion_tokens is None and reasoning_tokens is None:
+        return None
+    return MetaTokenUsage(prompt_tokens, completion_tokens, reasoning_tokens)
+
+
+def _read_field(value: object, name: str) -> object:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, Mapping):
+            return value.get(name)
+        return getattr(value, name, None)
+    except Exception:
+        return None
+
+
+def _nonnegative_int(value: object) -> int | None:
+    if type(value) is int and value >= 0:
+        return value
+    return None

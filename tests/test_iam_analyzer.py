@@ -18,6 +18,19 @@ def policy(*statements):
 
 
 class IAMAnalyzerTests(unittest.TestCase):
+    def test_exact_security_group_ingress_action_is_retained_for_correlation(self):
+        findings = analyze_iam_policy({
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Action": "ec2:AuthorizeSecurityGroupIngress",
+                "Resource": "*",
+            }],
+        })
+        sensitive = [item for item in findings if item.evidence.get("matched_actions")]
+        self.assertEqual(len(sensitive), 1)
+        self.assertEqual(sensitive[0].evidence["matched_actions"], ["ec2:AuthorizeSecurityGroupIngress"])
+
     def test_unrestricted_wildcard_allow_is_high_severity(self):
         findings = analyze_iam_policy(policy(statement(action="*", resource="*", Sid="Admin")))
         self.assertEqual(len(findings), 1)

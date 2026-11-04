@@ -58,6 +58,21 @@ _RULES = {
             "target identity's key inventory through your approved process."
         ),
     },
+    "ec2-authorize-security-group-ingress-public-admin": {
+        "event_source": "ec2.amazonaws.com",
+        "event_names": {"AuthorizeSecurityGroupIngress"},
+        "severity": Severity.HIGH,
+        "title": "Security group ingress event allows public SSH or RDP",
+        "description": (
+            "This successful CloudTrail event records a security group ingress change "
+            "allowing TCP SSH or RDP from an internet-wide CIDR. It does not establish "
+            "exploitation, malicious intent, persistence, or the resource's current state."
+        ),
+        "remediation": (
+            "Confirm whether the ingress change was intended and review the current "
+            "security group configuration through your approved process."
+        ),
+    },
     "console-login-without-mfa": {
         "event_source": "signin.amazonaws.com",
         "event_names": {"ConsoleLogin"},
@@ -98,6 +113,8 @@ def analyze_cloudtrail_events(document: object) -> list[Finding]:
                 "rule_id": rule_id,
                 "event": dict(record),
             }
+            if rule_id == "ec2-authorize-security-group-ingress-public-admin":
+                evidence["matched_permissions"] = _public_admin_permissions(record)
             if event_id is not None:
                 evidence["eventID"] = event_id
             findings.append(
@@ -189,6 +206,9 @@ def _matches_rule(record: Mapping[str, object], rule: Mapping[str, object]) -> b
     if record.get("eventName") not in rule["event_names"]:
         return False
 
+    if record.get("eventName") == "AuthorizeSecurityGroupIngress":
+        return "errorCode" not in record and bool(_public_admin_permissions(record))
+
     if rule["event_source"] == "signin.amazonaws.com":
         additional = record.get("additionalEventData")
         response = record.get("responseElements")
@@ -199,6 +219,56 @@ def _matches_rule(record: Mapping[str, object], rule: Mapping[str, object]) -> b
             and response.get("ConsoleLogin") == "Success"
         )
     return "errorCode" not in record
+
+
+def _public_admin_permissions(record: Mapping[str, object]) -> list[dict[str, object]]:
+    """Return only unambiguous TCP admin-port permissions with public CIDRs."""
+    request = record.get("requestParameters")
+    if not isinstance(request, Mapping):
+        return []
+    permissions = request.get("ipPermissions")
+    if isinstance(permissions, Mapping):
+        permissions = permissions.get("items")
+    if not isinstance(permissions, list):
+        return []
+
+    matches: list[dict[str, object]] = []
+    for permission in permissions:
+        if not isinstance(permission, Mapping):
+            continue
+        protocol = permission.get("ipProtocol")
+        start, end = permission.get("fromPort"), permission.get("toPort")
+        if protocol not in {"tcp", "6"} or not _is_int(start) or not _is_int(end) or start > end:
+            continue
+        admin_ports = [port for port in (22, 3389) if start <= port <= end]
+        if not admin_ports:
+            continue
+        cidrs: set[str] = set()
+        for field, cidr_key, public_cidr in (
+            ("ipRanges", "cidrIp", "0.0.0.0/0"),
+            ("ipv6Ranges", "cidrIpv6", "::/0"),
+        ):
+            ranges = permission.get(field)
+            if isinstance(ranges, Mapping):
+                ranges = ranges.get("items")
+            if not isinstance(ranges, list):
+                continue
+            for item in ranges:
+                if isinstance(item, Mapping) and item.get(cidr_key) == public_cidr:
+                    cidrs.add(public_cidr)
+        if cidrs:
+            matches.append({
+                "protocol": "tcp",
+                "from_port": start,
+                "to_port": end,
+                "admin_ports": admin_ports,
+                "public_cidrs": sorted(cidrs),
+            })
+    return matches
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _event_identity(rule_id: str, record: Mapping[str, object]) -> tuple[str, str]:

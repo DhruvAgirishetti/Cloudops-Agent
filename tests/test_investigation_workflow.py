@@ -373,11 +373,28 @@ class InvestigationWorkflowTests(unittest.TestCase):
 
         execute_investigation_action(
             state, key, built, requested=True, label="finding", force=True,
+            client_factory=lambda: FakeMetaClient(SimpleCompletion("partial", finish_reason="length")),
+        )
+        self.assertEqual(state[key]["status"], "success")
+        self.assertIs(state[key]["output"], previous_output)
+        self.assertEqual(
+            state[key]["last_reinvestigation_error"],
+            "The AI provider returned no usable response. Try again later.",
+        )
+        self.assertEqual(state[key]["last_reinvestigation_error_category"], "non_stop_finish_reason:length")
+        self.assertNotIn("partial", repr(state[key]))
+
+        execute_investigation_action(
+            state, key, built, requested=True, label="finding", force=True,
             client_factory=lambda: FakeMetaClient(exception=RuntimeError("private failure details")),
         )
         self.assertEqual(state[key]["status"], "success")
         self.assertIs(state[key]["output"], previous_output)
-        self.assertIn("failed", state[key]["last_reinvestigation_error"])
+        self.assertEqual(
+            state[key]["last_reinvestigation_error"],
+            "The AI provider request failed. Check the provider setup and try again.",
+        )
+        self.assertNotIn("last_reinvestigation_error_category", state[key])
         self.assertNotIn("private failure details", repr(state[key]))
 
     def test_failed_or_invalid_attempt_is_not_cached_as_a_success(self):
@@ -414,10 +431,10 @@ class InvestigationWorkflowTests(unittest.TestCase):
 
 
 class SimpleCompletion:
-    def __init__(self, content, usage=None):
+    def __init__(self, content, usage=None, finish_reason="stop"):
         from types import SimpleNamespace
         self.choices = [SimpleNamespace(
-            finish_reason="stop",
+            finish_reason=finish_reason,
             message=SimpleNamespace(content=content, refusal=None),
         )]
         self.usage = usage

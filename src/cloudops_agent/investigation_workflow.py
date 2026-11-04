@@ -144,9 +144,11 @@ def execute_investigation_action(
         provider = MetaProvider(client_factory())
         result = provider.investigate_with_usage(built_input)
     except MetaProviderError as error:
+        diagnostic_category = getattr(error, "diagnostic_category", None)
         _store_safe_failure(
             session_state, result_key, label, _safe_error_message(error),
             cached_result if has_cached_result else None,
+            diagnostic_category=diagnostic_category,
         )
     except Exception:
         _store_safe_failure(
@@ -169,17 +171,27 @@ def _store_safe_failure(
     label: str,
     message: str,
     cached_result: object,
+    *,
+    diagnostic_category: object = None,
 ) -> None:
+    if not isinstance(diagnostic_category, str):
+        diagnostic_category = None
     if isinstance(cached_result, dict):
         preserved = dict(cached_result)
         preserved["last_reinvestigation_error"] = message
+        preserved.pop("last_reinvestigation_error_category", None)
+        if diagnostic_category is not None:
+            preserved["last_reinvestigation_error_category"] = diagnostic_category
         session_state[result_key] = preserved
     else:
-        session_state[result_key] = {
+        record = {
             "status": "error",
             "label": label,
             "message": message,
         }
+        if diagnostic_category is not None:
+            record["diagnostic_category"] = diagnostic_category
+        session_state[result_key] = record
 
 
 def _safe_error_message(error: MetaProviderError) -> str:

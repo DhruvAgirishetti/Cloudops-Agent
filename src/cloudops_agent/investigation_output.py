@@ -310,8 +310,8 @@ def _validate_reference_scope(references: InvestigationReferences) -> None:
             references.target_ref not in references.correlations
             or set(references.correlations) != {references.target_ref}
             or endpoints is None
-            or len(endpoints) != 2
-            or len(set(endpoints)) != 2
+            or len(endpoints) not in {2, 3}
+            or len(set(endpoints)) != len(endpoints)
             or set(references.findings) != set(endpoints)
         ):
             _fail("Request reference map has an invalid correlation scope.")

@@ -1,0 +1,77 @@
+{
+  "Records": [
+    {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAEXAMPLEDEPLOY",
+        "arn": "arn:aws:iam::123456789012:user/app-deploy",
+        "accountId": "123456789012",
+        "userName": "app-deploy"
+      },
+      "eventTime": "2026-11-03T18:42:11Z",
+      "eventSource": "iam.amazonaws.com",
+      "eventName": "CreateAccessKey",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "198.51.100.24",
+      "userAgent": "console.amazonaws.com",
+      "requestParameters": {
+        "userName": "app-deploy"
+      },
+      "responseElements": {
+        "accessKey": {
+          "userName": "app-deploy",
+          "status": "Active"
+        }
+      },
+      "eventID": "11111111-2222-4333-8444-555555555555",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123456789012"
+    },
+    {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAEXAMPLEDEPLOY",
+        "arn": "arn:aws:iam::123456789012:user/app-deploy",
+        "accountId": "123456789012",
+        "userName": "app-deploy"
+      },
+      "eventTime": "2026-11-03T18:47:36Z",
+      "eventSource": "ec2.amazonaws.com",
+      "eventName": "AuthorizeSecurityGroupIngress",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "198.51.100.24",
+      "userAgent": "console.amazonaws.com",
+      "requestParameters": {
+        "groupId": "sg-0123456789abcdef0",
+        "ipPermissions": {
+          "items": [
+            {
+              "ipProtocol": "tcp",
+              "fromPort": 22,
+              "toPort": 22,
+              "ipRanges": {
+                "items": [
+                  {
+                    "cidrIp": "0.0.0.0/0"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "responseElements": {
+        "requestId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+      },
+      "eventID": "66666666-7777-4888-8999-000000000000",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123456789012"
+    }
+  ]
+}

@@ -25,6 +25,52 @@ def event(event_source, event_name, **values):
 
 
 class CloudTrailAnalyzerTests(unittest.TestCase):
+    @staticmethod
+    def ingress_event(**values):
+        request = {"ipPermissions": {"items": [{
+            "ipProtocol": "tcp", "fromPort": 22, "toPort": 22,
+            "ipRanges": {"items": [{"cidrIp": "0.0.0.0/0"}]},
+        }]}}
+        request.update(values.pop("requestParameters", {}))
+        return event("ec2.amazonaws.com", "AuthorizeSecurityGroupIngress", requestParameters=request, **values)
+
+    def test_public_ssh_ingress_event_is_reported_with_normalized_evidence(self):
+        finding = analyze_cloudtrail_events(self.ingress_event())[0]
+        self.assertEqual(finding.evidence["rule_id"], "ec2-authorize-security-group-ingress-public-admin")
+        self.assertEqual(finding.evidence["event"]["requestParameters"]["ipPermissions"]["items"][0]["fromPort"], 22)
+        self.assertEqual(finding.evidence["matched_permissions"], [{
+            "protocol": "tcp", "from_port": 22, "to_port": 22,
+            "admin_ports": [22], "public_cidrs": ["0.0.0.0/0"],
+        }])
+        self.assertIn("does not establish", finding.description)
+
+    def test_public_rdp_and_ipv6_ingress_are_reported(self):
+        rdp = self.ingress_event(requestParameters={"ipPermissions": {"items": [{
+            "ipProtocol": "6", "fromPort": 3300, "toPort": 3400,
+            "ipv6Ranges": {"items": [{"cidrIpv6": "::/0"}]},
+        }]}})
+        finding = analyze_cloudtrail_events(rdp)[0]
+        self.assertEqual(finding.evidence["matched_permissions"][0]["admin_ports"], [3389])
+        self.assertEqual(finding.evidence["matched_permissions"][0]["public_cidrs"], ["::/0"])
+
+    def test_failed_restricted_unrelated_and_malformed_ingress_do_not_match(self):
+        restricted = self.ingress_event(requestParameters={"ipPermissions": {"items": [{
+            "ipProtocol": "tcp", "fromPort": 22, "toPort": 22,
+            "ipRanges": {"items": [{"cidrIp": "203.0.113.0/24"}]},
+        }]}})
+        other_port = self.ingress_event(requestParameters={"ipPermissions": {"items": [{
+            "ipProtocol": "tcp", "fromPort": 443, "toPort": 443,
+            "ipRanges": {"items": [{"cidrIp": "0.0.0.0/0"}]},
+        }]}})
+        malformed = self.ingress_event(requestParameters={"ipPermissions": "unknown"})
+        for record in (
+            self.ingress_event(errorCode="UnauthorizedOperation"),
+            restricted, other_port, malformed,
+            event("ec2.amazonaws.com", "AuthorizeSecurityGroupIngress"),
+        ):
+            with self.subTest(record=record):
+                self.assertEqual(analyze_cloudtrail_events(record), [])
+
     def test_stop_logging_event_reports_high_severity_and_preserves_evidence(self):
         record = event(
             "cloudtrail.amazonaws.com", "StopLogging", requestParameters={"name": "audit"}

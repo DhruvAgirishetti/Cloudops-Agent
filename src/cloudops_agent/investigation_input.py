@@ -80,8 +80,8 @@ def build_investigation_input(
     elif isinstance(scope, Correlation):
         if scope not in current_correlations:
             raise ValueError("Selected correlation is not in the current correlation set.")
-        if len(scope.finding_refs) != 2:
-            raise ValueError("A selected correlation must reference exactly two findings.")
+        if len(scope.finding_refs) not in {2, 3} or len(set(scope.finding_refs)) != len(scope.finding_refs):
+            raise ValueError("A selected correlation must reference two or three distinct findings.")
         selected_refs = scope.finding_refs
         missing = [ref for ref in selected_refs if ref not in finding_index]
         if missing:
@@ -230,6 +230,9 @@ def _allowlisted_evidence(finding: Finding) -> list[dict[str, object]]:
             "trail-stop-logging": ("cloudtrail.amazonaws.com", "StopLogging", "error_absent"),
             "trail-delete": ("cloudtrail.amazonaws.com", "DeleteTrail", "error_absent"),
             "iam-create-access-key": ("iam.amazonaws.com", "CreateAccessKey", "error_absent"),
+            "ec2-authorize-security-group-ingress-public-admin": (
+                "ec2.amazonaws.com", "AuthorizeSecurityGroupIngress", "public_admin_ingress",
+            ),
             "console-login-without-mfa": ("signin.amazonaws.com", "ConsoleLogin", "console"),
         }
         if rule_id not in rule_fields:
@@ -248,7 +251,7 @@ def _allowlisted_evidence(finding: Finding) -> list[dict[str, object]]:
             if "errorCode" in event:
                 raise ValueError("CloudTrail API finding unexpectedly contains errorCode.")
             values.append(("errorCode_status", "absent", "application_derived"))
-        else:
+        elif mode == "console":
             additional = event.get("additionalEventData")
             response = event.get("responseElements")
             if not isinstance(additional, Mapping) or additional.get("MFAUsed") != "No":
@@ -259,6 +262,28 @@ def _allowlisted_evidence(finding: Finding) -> list[dict[str, object]]:
                 ("event.additionalEventData.MFAUsed", "No", "analyzer_evidence"),
                 ("event.responseElements.ConsoleLogin", "Success", "analyzer_evidence"),
             ))
+        else:
+            if "errorCode" in event:
+                raise ValueError("CloudTrail ingress finding unexpectedly contains errorCode.")
+            permissions = evidence.get("matched_permissions")
+            if not isinstance(permissions, list) or not permissions:
+                raise ValueError("CloudTrail ingress finding lacks matched permission evidence.")
+            for permission in permissions:
+                if not isinstance(permission, Mapping):
+                    raise ValueError("CloudTrail ingress permission evidence is malformed.")
+                ports = permission.get("admin_ports")
+                cidrs = permission.get("public_cidrs")
+                if (
+                    permission.get("protocol") != "tcp"
+                    or not isinstance(ports, list) or not ports
+                    or any(port not in {22, 3389} for port in ports)
+                    or not isinstance(cidrs, list) or not cidrs
+                    or any(cidr not in {"0.0.0.0/0", "::/0"} for cidr in cidrs)
+                ):
+                    raise ValueError("CloudTrail ingress finding has unsupported matched permission evidence.")
+                values.append(("matched_permissions.protocol", "tcp", "analyzer_evidence"))
+                values.extend(("matched_permissions.admin_ports", str(port), "analyzer_evidence") for port in ports)
+                values.extend(("matched_permissions.public_cidrs", cidr, "analyzer_evidence") for cidr in cidrs)
     elif finding.source_type is SourceType.TERRAFORM:
         supported = {
             "s3-public-acl": ("acl",),

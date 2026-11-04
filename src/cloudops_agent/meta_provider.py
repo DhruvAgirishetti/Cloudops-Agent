@@ -28,6 +28,21 @@ class MetaProviderConfig:
 
 DEFAULT_META_CONFIG = MetaProviderConfig()
 MAX_COMPLETION_TOKENS = 4096
+_RECOGNIZED_NON_STOP_FINISH_REASONS = {"length", "tool_calls", "content_filter", "function_call"}
+_RESPONSE_DIAGNOSTIC_CATEGORIES = {
+    "empty_response",
+    "empty_choices",
+    "unexpected_response_structure",
+    "missing_finish_reason",
+    "non_stop_finish_reason:length",
+    "non_stop_finish_reason:tool_calls",
+    "non_stop_finish_reason:content_filter",
+    "non_stop_finish_reason:function_call",
+    "non_stop_finish_reason:other",
+    "missing_content",
+    "empty_content",
+    "non_text_content",
+}
 
 
 SYSTEM_INSTRUCTIONS = """You are the CloudOps Agent cloud security investigation assistant.
@@ -82,6 +97,10 @@ class MetaClientError(MetaProviderError):
 class MetaEmptyResponseError(MetaProviderError):
     """Raised when the provider returns no response text."""
 
+    def __init__(self, message: str, diagnostic_category: str) -> None:
+        super().__init__(message)
+        self.diagnostic_category = _safe_diagnostic_category(diagnostic_category)
+
 
 class MetaRefusalError(MetaProviderError):
     """Raised when the provider refuses the investigation request."""
@@ -89,6 +108,10 @@ class MetaRefusalError(MetaProviderError):
 
 class MetaResponseExtractionError(MetaProviderError):
     """Raised when a provider response cannot be read safely."""
+
+    def __init__(self, message: str, diagnostic_category: str) -> None:
+        super().__init__(message)
+        self.diagnostic_category = _safe_diagnostic_category(diagnostic_category)
 
 
 class MetaOutputValidationError(MetaProviderError):
@@ -306,45 +329,84 @@ def _serialize_built_input(built_input: BuiltInvestigationInput) -> str:
 
 def _extract_response_text(response: object) -> str:
     if response is None:
-        raise MetaEmptyResponseError("The Meta provider returned no response.")
+        raise MetaEmptyResponseError("The Meta provider returned no response.", "empty_response")
     try:
         choices = getattr(response, "choices")
     except Exception:
-        raise MetaResponseExtractionError("The Meta response could not be read.") from None
+        raise MetaResponseExtractionError(
+            "The Meta response could not be read.", "unexpected_response_structure",
+        ) from None
     if not isinstance(choices, (list, tuple)) or len(choices) != 1:
         if isinstance(choices, (list, tuple)) and not choices:
-            raise MetaEmptyResponseError("The Meta provider returned no response choices.")
-        raise MetaResponseExtractionError("The Meta response did not contain exactly one choice.")
+            raise MetaEmptyResponseError(
+                "The Meta provider returned no response choices.", "empty_choices",
+            )
+        raise MetaResponseExtractionError(
+            "The Meta response did not contain exactly one choice.", "unexpected_response_structure",
+        )
     choice = choices[0]
     try:
         finish_reason = getattr(choice, "finish_reason")
     except Exception:
-        raise MetaResponseExtractionError("The Meta response finish reason could not be read.") from None
+        raise MetaResponseExtractionError(
+            "The Meta response finish reason could not be read.", "missing_finish_reason",
+        ) from None
+    if finish_reason is None:
+        raise MetaResponseExtractionError(
+            "The Meta response finish reason could not be read.", "missing_finish_reason",
+        )
     if finish_reason != "stop":
-        raise MetaResponseExtractionError("The Meta response did not finish as a text response.")
+        safe_reason = (
+            finish_reason
+            if isinstance(finish_reason, str) and finish_reason in _RECOGNIZED_NON_STOP_FINISH_REASONS
+            else "other"
+        )
+        raise MetaResponseExtractionError(
+            "The Meta response did not finish as a text response.",
+            f"non_stop_finish_reason:{safe_reason}",
+        )
     try:
         message = getattr(choice, "message")
     except Exception:
-        raise MetaResponseExtractionError("The Meta response message could not be read.") from None
+        raise MetaResponseExtractionError(
+            "The Meta response message could not be read.", "unexpected_response_structure",
+        ) from None
     if message is None:
-        raise MetaResponseExtractionError("The Meta response message could not be read.")
+        raise MetaResponseExtractionError(
+            "The Meta response message could not be read.", "unexpected_response_structure",
+        )
     try:
         refusal = getattr(message, "refusal", None)
     except Exception:
-        raise MetaResponseExtractionError("The Meta response refusal field could not be read.") from None
+        raise MetaResponseExtractionError(
+            "The Meta response refusal field could not be read.", "unexpected_response_structure",
+        ) from None
     if refusal is not None and not isinstance(refusal, str):
-        raise MetaResponseExtractionError("The Meta response refusal field was malformed.")
+        raise MetaResponseExtractionError(
+            "The Meta response refusal field was malformed.", "unexpected_response_structure",
+        )
     if isinstance(refusal, str) and refusal.strip():
         raise MetaRefusalError("The Meta provider refused the investigation request.")
     try:
         content = getattr(message, "content")
     except Exception:
-        raise MetaResponseExtractionError("The Meta response message could not be read.") from None
-    if content is None or content == "":
-        raise MetaEmptyResponseError("The Meta provider returned an empty response.")
+        raise MetaResponseExtractionError(
+            "The Meta response message could not be read.", "missing_content",
+        ) from None
+    if content is None:
+        raise MetaEmptyResponseError("The Meta provider returned an empty response.", "missing_content")
+    if content == "":
+        raise MetaEmptyResponseError("The Meta provider returned an empty response.", "empty_content")
     if not isinstance(content, str):
-        raise MetaResponseExtractionError("The Meta response content was not text.")
+        raise MetaResponseExtractionError("The Meta response content was not text.", "non_text_content")
     return content
+
+
+def _safe_diagnostic_category(category: str) -> str:
+    """Accept only fixed internal labels; never preserve provider-supplied strings."""
+    if isinstance(category, str) and category in _RESPONSE_DIAGNOSTIC_CATEGORIES:
+        return category
+    return "unexpected_response_structure"
 
 
 def _extract_token_usage(response: object) -> MetaTokenUsage | None:

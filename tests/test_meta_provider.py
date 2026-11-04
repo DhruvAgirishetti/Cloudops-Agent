@@ -215,9 +215,16 @@ class MetaProviderTests(unittest.TestCase):
 
     def test_empty_and_unreadable_responses_have_distinct_errors(self):
         built = built_input()
-        for response in (None, completion(None), completion("")):
-            with self.subTest(response=response), self.assertRaises(MetaEmptyResponseError):
+        cases = (
+            (None, "empty_response"),
+            (completion(None), "missing_content"),
+            (completion(""), "empty_content"),
+            (SimpleNamespace(choices=[]), "empty_choices"),
+        )
+        for response, category in cases:
+            with self.subTest(category=category), self.assertRaises(MetaEmptyResponseError) as raised:
                 MetaProvider(FakeMetaClient(response)).investigate(built)
+            self.assertEqual(raised.exception.diagnostic_category, category)
 
     def test_refusal_is_rejected_without_exposing_refusal_or_json_content(self):
         built = built_input()
@@ -233,27 +240,35 @@ class MetaProviderTests(unittest.TestCase):
 
     def test_finish_reason_must_be_explicit_stop(self):
         built = built_input()
-        for finish_reason in (None, "length", "tool_calls", "content_filter", "other"):
-            with self.subTest(finish_reason=finish_reason), self.assertRaises(MetaResponseExtractionError):
+        for finish_reason, category in (
+            (None, "missing_finish_reason"),
+            ("length", "non_stop_finish_reason:length"),
+            ("tool_calls", "non_stop_finish_reason:tool_calls"),
+            ("content_filter", "non_stop_finish_reason:content_filter"),
+            ("untrusted provider detail", "non_stop_finish_reason:other"),
+        ):
+            with self.subTest(finish_reason=finish_reason), self.assertRaises(MetaResponseExtractionError) as raised:
                 MetaProvider(FakeMetaClient(completion("{}", finish_reason=finish_reason))).investigate(built)
+            self.assertEqual(raised.exception.diagnostic_category, category)
+            self.assertNotIn("untrusted provider detail", raised.exception.diagnostic_category)
 
     def test_missing_ambiguous_and_malformed_response_structures_are_rejected(self):
         built = built_input()
         response_cases = (
-            (SimpleNamespace(), MetaResponseExtractionError),
-            (SimpleNamespace(choices=[]), MetaEmptyResponseError),
-            (SimpleNamespace(choices=[completion("{}").choices[0], completion("{}").choices[0]]), MetaResponseExtractionError),
-            (SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop")]), MetaResponseExtractionError),
-            (SimpleNamespace(choices=[SimpleNamespace(
-                finish_reason="stop", message=SimpleNamespace(refusal=None),
-            )]), MetaResponseExtractionError),
-            (completion([{"type": "text", "text": "{}"}]), MetaResponseExtractionError),
-            (completion(b"{}"), MetaResponseExtractionError),
-            (SimpleNamespace(choices=None), MetaResponseExtractionError),
+            (SimpleNamespace(), MetaResponseExtractionError, "unexpected_response_structure"),
+            (SimpleNamespace(choices=[completion("{}").choices[0], completion("{}").choices[0]]), MetaResponseExtractionError, "unexpected_response_structure"),
+            (SimpleNamespace(choices=[SimpleNamespace()]), MetaResponseExtractionError, "missing_finish_reason"),
+            (SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop")]), MetaResponseExtractionError, "unexpected_response_structure"),
+            (SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop", message=None)]), MetaResponseExtractionError, "unexpected_response_structure"),
+            (SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(refusal=None))]), MetaResponseExtractionError, "missing_content"),
+            (completion([{"type": "text", "text": "{}"}]), MetaResponseExtractionError, "non_text_content"),
+            (completion(b"{}"), MetaResponseExtractionError, "non_text_content"),
+            (SimpleNamespace(choices=None), MetaResponseExtractionError, "unexpected_response_structure"),
         )
-        for response, error_type in response_cases:
-            with self.subTest(response=response), self.assertRaises(error_type):
+        for response, error_type, category in response_cases:
+            with self.subTest(response=response), self.assertRaises(error_type) as raised:
                 MetaProvider(FakeMetaClient(response)).investigate(built)
+            self.assertEqual(raised.exception.diagnostic_category, category)
 
     def test_provider_exceptions_are_wrapped_without_sensitive_exception_text(self):
         built = built_input()

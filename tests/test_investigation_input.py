@@ -300,6 +300,38 @@ class InvestigationInputTests(unittest.TestCase):
                 resolve_citation(result.references, record["finding_ref"])[0], "finding",
             )
 
+    def test_selected_three_source_correlation_includes_exact_three_findings(self):
+        iam = iam_finding()
+        trail = make_finding("ct-network", SourceType.CLOUDTRAIL, {
+            "rule_id": "ec2-authorize-security-group-ingress-public-admin",
+            "event": {"eventSource": "ec2.amazonaws.com", "eventName": "AuthorizeSecurityGroupIngress"},
+            "matched_permissions": [{
+                "protocol": "tcp", "admin_ports": [22], "public_cidrs": ["0.0.0.0/0"],
+            }],
+        })
+        terraform = terraform_finding()
+        refs = (FindingRef("i", iam.finding_id), FindingRef("c", trail.finding_id), FindingRef("t", terraform.finding_id))
+        correlation = Correlation(
+            correlation_id="network-correlation", relationship_type="configuration_pattern_overlap",
+            finding_refs=refs, supporting_evidence=(EvidenceValue("evidence.pattern", "tcp/22 0.0.0.0/0"),),
+            explanation="The CloudTrail and Terraform evidence share a configuration pattern.",
+            limitations=("The Terraform resource is not identified as the deployed event target.",),
+        )
+        built = build_investigation_input(
+            user_request="Explain this pattern overlap.", scope=correlation,
+            artifacts=[("i", [iam]), ("c", [trail]), ("t", [terraform])],
+            correlations=[correlation],
+        )
+        self.assertEqual(len(built.payload["findings"]), 3)
+        self.assertEqual(len(built.payload["correlations"][0]["finding_refs"]), 3)
+        self.assertEqual(len(built.references.correlation_findings[built.references.target_ref]), 3)
+
+        with self.assertRaisesRegex(ValueError, "findings missing"):
+            build_investigation_input(
+                user_request="Explain this pattern overlap.", scope=correlation,
+                artifacts=[("i", [iam]), ("c", [trail])], correlations=[correlation],
+            )
+
     def test_missing_or_stale_finding_and_correlation_endpoints_are_rejected(self):
         finding = iam_finding()
         stale_ref = FindingRef("old-artifact", finding.finding_id)

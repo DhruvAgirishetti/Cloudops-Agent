@@ -155,6 +155,7 @@ correlation_artifacts = current_finding_artifacts(
     {
         "iam": active_iam_result_keys,
         "cloudtrail": active_cloudtrail_result_keys,
+        "terraform": active_terraform_result_keys,
     },
 )
 correlations = correlate_findings(correlation_artifacts)
@@ -306,7 +307,7 @@ if correlations:
         with st.container(border=True):
             st.subheader(correlation.relationship_type.replace("_", " ").title())
             st.caption(f"Correlation ID: {correlation.correlation_id}")
-            endpoint_columns = st.columns(2)
+            endpoint_columns = st.columns(len(correlation.finding_refs))
             for endpoint_index, (endpoint_column, finding_ref) in enumerate(
                 zip(endpoint_columns, correlation.finding_refs),
                 start=1,
@@ -351,7 +352,7 @@ if correlations:
                 )
 else:
     st.info(
-        "No correlations were found under the currently supported exact-evidence rule. "
+        "No correlations were found under the currently supported evidence rules. "
         "This does not establish that the uploaded inputs are unrelated or safe."
     )
 
@@ -427,6 +428,7 @@ if pending_investigation is not None:
                     label=scope_label,
                     force=force_reinvestigation,
                 )
+    st.rerun()
 
 visible_ai_results = [
     (key, st.session_state.get(key))

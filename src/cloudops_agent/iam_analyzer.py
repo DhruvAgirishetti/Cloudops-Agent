@@ -11,6 +11,7 @@ class IAMPolicyValidationError(ValueError):
 
 
 _SENSITIVE_IAM_ACTIONS = (
+    "ec2:AuthorizeSecurityGroupIngress",
     "iam:CreateAccessKey",
     "iam:AttachUserPolicy",
     "iam:PutUserPolicy",

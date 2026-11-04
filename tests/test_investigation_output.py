@@ -305,6 +305,27 @@ class InvestigationOutputTests(unittest.TestCase):
         with self.assertRaises(InvestigationOutputValidationError):
             validate_investigation_output(json.dumps(response), built.references)
 
+    def test_correlation_scope_validator_accepts_exact_three_endpoints(self):
+        built = correlation_request()
+        refs = dict(built.references.findings)
+        third_alias = "f_third"
+        third_ref = FindingRef("third-artifact-hash", "third-finding-id")
+        refs[third_alias] = third_ref
+        correlation_ref = next(iter(built.references.correlations))
+        from dataclasses import replace
+        from types import MappingProxyType
+        reference_map = replace(
+            built.references,
+            artifacts=MappingProxyType({
+                **built.references.artifacts, "a_third": "third-artifact-hash",
+            }),
+            findings=MappingProxyType(refs),
+            correlation_findings=MappingProxyType({correlation_ref: tuple(refs)}),
+        )
+        response = valid_response(reference_map)
+        validated = validate_investigation_output(json.dumps(response), reference_map)
+        self.assertEqual(validated.summary.references, tuple(response["summary"]["references"]))
+
     def test_valid_citation_does_not_claim_semantic_correctness(self):
         built = finding_request()
         response = valid_response(built.references)

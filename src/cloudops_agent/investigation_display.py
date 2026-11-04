@@ -17,9 +17,26 @@ def render_investigation_output(streamlit: object, output: InvestigationOutput) 
     streamlit.text(output.summary.text)
     _citations(streamlit, output.summary.references)
 
+    streamlit.markdown("**Recommendations**")
+    for index, recommendation in enumerate(output.recommendations, start=1):
+        streamlit.markdown(
+            f"**{recommendation.type.title()} · {recommendation.priority.title()} priority · Advisory**"
+        )
+        streamlit.caption(f"Recommendation {index}")
+        streamlit.text(recommendation.action)
+        streamlit.caption("Rationale")
+        streamlit.text(recommendation.rationale)
+        _citations(streamlit, recommendation.references)
+        if recommendation.uncertainty.present:
+            streamlit.text(f"Uncertainty: {recommendation.uncertainty.note}")
+        else:
+            streamlit.caption("Uncertainty: none stated.")
+        if index < len(output.recommendations):
+            streamlit.markdown("---")
+
     streamlit.markdown("**Observations**")
     for index, observation in enumerate(output.observations, start=1):
-        streamlit.markdown(f"Observation {index} · {observation.basis.replace('_', ' ')}")
+        streamlit.markdown(f"**Observation {index} · {observation.basis.replace('_', ' ')}**")
         streamlit.text(observation.claim)
         _citations(streamlit, observation.references)
         if observation.uncertainty.present:
@@ -31,20 +48,6 @@ def render_investigation_output(streamlit: object, output: InvestigationOutput) 
     for limitation in output.limitations:
         streamlit.text(limitation.text)
         _citations(streamlit, limitation.references)
-
-    streamlit.markdown("**Recommendations**")
-    for recommendation in output.recommendations:
-        streamlit.markdown(
-            f"{recommendation.type.title()} · {recommendation.priority.title()} priority"
-        )
-        streamlit.text(recommendation.action)
-        streamlit.caption("Rationale")
-        streamlit.text(recommendation.rationale)
-        _citations(streamlit, recommendation.references)
-        if recommendation.uncertainty.present:
-            streamlit.text(f"Uncertainty: {recommendation.uncertainty.note}")
-        else:
-            streamlit.caption("Uncertainty: none stated.")
 
 
 def render_token_usage(streamlit: object, usage: MetaTokenUsage | None) -> None:

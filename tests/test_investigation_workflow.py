@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from cloudops_agent.correlation import Correlation, EvidenceValue, FindingRef
-from cloudops_agent.investigation_display import render_investigation_output, render_token_usage
+from cloudops_agent.investigation_display import (
+    VALIDATION_DISCLAIMER,
+    render_investigation_output,
+    render_token_usage,
+)
 from cloudops_agent.investigation_output import InvestigationOutput
 from cloudops_agent.investigation_workflow import (
     active_investigation_result_keys,
@@ -133,6 +137,13 @@ def matching_correlation():
 
 
 class InvestigationWorkflowTests(unittest.TestCase):
+    def test_ui_disclaimer_covers_advisory_non_execution_and_semantic_limits(self):
+        self.assertIn("Recommendations are advisory only", VALIDATION_DISCLAIMER)
+        self.assertIn("never automatically executes", VALIDATION_DISCLAIMER)
+        self.assertIn("applies, or verifies", VALIDATION_DISCLAIMER)
+        self.assertIn("scope and existence", VALIDATION_DISCLAIMER)
+        self.assertIn("not semantic correctness", VALIDATION_DISCLAIMER)
+
     def test_finding_builder_uses_artifact_scoped_reference_and_omits_correlations(self):
         selected = iam_finding()
         other = iam_finding()

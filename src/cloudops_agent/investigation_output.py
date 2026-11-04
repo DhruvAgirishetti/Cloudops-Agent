@@ -17,7 +17,8 @@ MAX_ACTION_CHARS = 1_500
 MAX_RATIONALE_CHARS = 3_000
 MAX_UNCERTAINTY_NOTE_CHARS = 500
 MAX_OBSERVATIONS = 30
-MAX_RECOMMENDATIONS = 20
+MIN_RECOMMENDATIONS = 1
+MAX_RECOMMENDATIONS = 3
 MAX_LIMITATIONS = 20
 MAX_CITATIONS_PER_ITEM = 3
 
@@ -88,6 +89,7 @@ _OUTPUT_JSON_SCHEMA: dict[str, object] = {
         },
         "recommendations": {
             "type": "array",
+            "minItems": MIN_RECOMMENDATIONS,
             "maxItems": MAX_RECOMMENDATIONS,
             "items": {
                 "type": "object",
@@ -213,6 +215,8 @@ def validate_investigation_output(
     recommendation_data = _list(
         document["recommendations"], "recommendations", MAX_RECOMMENDATIONS,
     )
+    if len(recommendation_data) < MIN_RECOMMENDATIONS:
+        _fail("recommendations must contain at least one item.")
     recommendations: list[Recommendation] = []
     for index, item in enumerate(recommendation_data):
         path = f"recommendations[{index}]"

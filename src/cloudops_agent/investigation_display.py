@@ -5,9 +5,9 @@ from cloudops_agent.meta_provider import MetaTokenUsage
 
 
 VALIDATION_DISCLAIMER = (
-    "Citations are checked for request scope and existence; this does not guarantee "
-    "that a claim is semantically supported by its cited evidence. Recommendations "
-    "are advisory and are never automatically executed."
+    "Recommendations are advisory only; CloudOps Agent never automatically executes, "
+    "applies, or verifies them. Citations are checked for scope and existence, not "
+    "semantic correctness."
 )
 
 

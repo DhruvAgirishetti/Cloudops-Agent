@@ -9,11 +9,14 @@ from cloudops_agent.correlation import Correlation, EvidenceValue, FindingRef
 from cloudops_agent.investigation_input import build_investigation_input
 from cloudops_agent.investigation_output import (
     InvestigationOutputValidationError,
+    MAX_RECOMMENDATIONS,
+    MIN_RECOMMENDATIONS,
     MAX_OBSERVATIONS,
     MAX_RESPONSE_BYTES,
     Observation,
     Recommendation,
     Uncertainty,
+    investigation_output_json_schema,
     validate_investigation_output,
 )
 from cloudops_agent.models import Finding, Severity, SourceType
@@ -120,6 +123,29 @@ class InvestigationOutputTests(unittest.TestCase):
         self.assertEqual(result.observations[0].uncertainty, Uncertainty(False, None))
         self.assertIsInstance(result.recommendations[0], Recommendation)
         self.assertEqual(result.recommendations[0].uncertainty.present, True)
+
+    def test_recommendation_count_enforces_one_to_three_items(self):
+        built = finding_request()
+        schema = investigation_output_json_schema()["properties"]["recommendations"]
+        self.assertEqual(schema["minItems"], MIN_RECOMMENDATIONS)
+        self.assertEqual(schema["maxItems"], MAX_RECOMMENDATIONS)
+
+        one = valid_response(built.references)
+        self.assertEqual(len(validate_investigation_output(json.dumps(one), built.references).recommendations), 1)
+
+        three = valid_response(built.references)
+        three["recommendations"] *= 3
+        self.assertEqual(len(validate_investigation_output(json.dumps(three), built.references).recommendations), 3)
+
+        zero = valid_response(built.references)
+        zero["recommendations"] = []
+        with self.assertRaisesRegex(InvestigationOutputValidationError, "at least one"):
+            validate_investigation_output(json.dumps(zero), built.references)
+
+        four = valid_response(built.references)
+        four["recommendations"] *= 4
+        with self.assertRaisesRegex(InvestigationOutputValidationError, "maximum number"):
+            validate_investigation_output(json.dumps(four), built.references)
 
     def test_bytes_json_is_supported(self):
         built = finding_request()
@@ -288,6 +314,25 @@ class InvestigationOutputTests(unittest.TestCase):
             validated.observations[0].claim,
             "This proves the uploaded environment is compromised.",
         )
+
+    def test_valid_recommendation_citation_does_not_validate_semantic_claim(self):
+        built = finding_request()
+        response = valid_response(built.references)
+        response["recommendations"][0]["type"] = "remediation"
+        response["recommendations"][0]["action"] = "The remediation has been applied and the finding is fixed."
+        response["recommendations"][0]["rationale"] = "This issue is resolved and verified."
+
+        validated = validate_investigation_output(json.dumps(response), built.references)
+
+        self.assertEqual(
+            validated.recommendations[0].action,
+            "The remediation has been applied and the finding is fixed.",
+        )
+        self.assertEqual(
+            validated.recommendations[0].rationale,
+            "This issue is resolved and verified.",
+        )
+        self.assertEqual(validated.recommendations[0].references, tuple(response["recommendations"][0]["references"]))
 
 
 if __name__ == "__main__":

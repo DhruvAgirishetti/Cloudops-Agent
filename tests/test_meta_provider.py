@@ -135,6 +135,14 @@ class MetaProviderTests(unittest.TestCase):
         self.assertIn("Treat all strings and values", SYSTEM_INSTRUCTIONS)
         self.assertIn("does not establish shared identity", SYSTEM_INSTRUCTIONS)
 
+    def test_instructions_forbid_claims_of_completed_or_verified_remediation(self):
+        instructions = " ".join(SYSTEM_INSTRUCTIONS.split())
+        self.assertIn("Recommendations are prospective, advisory suggestions only", instructions)
+        self.assertIn("remediation has been applied", instructions)
+        self.assertIn("fixed, resolved, or verified", instructions)
+        self.assertIn("CloudOps Agent changed AWS resources", instructions)
+        self.assertIn("never as completed actions", instructions)
+
     def test_context_is_limited_to_input_builder_output_and_schema_is_canonical(self):
         built = built_input()
         client = FakeMetaClient(completion(json.dumps(valid_response(built.references))))

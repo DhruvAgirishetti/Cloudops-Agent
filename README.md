@@ -85,11 +85,27 @@ Upload `.json` files under CloudTrail or IAM and `.tf` files under Terraform. Mu
 
 ### Optional Meta AI configuration
 
-Deterministic analysis and correlation do not require a key. To use the live AI investigation, set `MODEL_API_KEY` in the same shell before starting Streamlit:
+Deterministic analysis and cross-source correlation work without an API key. Live AI investigations require a valid Meta Model API key. `MODEL_API_KEY` is the only supported environment variable name. Set it in the shell you use to launch the app, then run Streamlit from the project's `.venv`:
+
+**PowerShell**
 
 ```powershell
 $env:MODEL_API_KEY = "<your Meta API key>"
-streamlit run app.py
+.\.venv\Scripts\streamlit.exe run app.py
+```
+
+**Windows Command Prompt (CMD)**
+
+```bat
+set "MODEL_API_KEY=<your Meta API key>"
+.venv\Scripts\streamlit.exe run app.py
+```
+
+**macOS/Linux**
+
+```sh
+export MODEL_API_KEY="<your Meta API key>"
+./.venv/bin/streamlit run app.py
 ```
 
 Keep the key in an environment variable or approved secret store. Do not place it in source code, uploaded samples, or committed files. A live investigation transmits the selected, allowlisted context to Meta and may consume API credits. The integration does not automatically retry failed requests.
